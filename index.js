@@ -1,31 +1,44 @@
 import express from "express";
-import { MongoClient } from 'mongodb';
-import 'dotenv/config';
+import { MongoClient } from "mongodb";
+import "dotenv/config";
 import cors from "cors";
 
 const app = express();
-const PORT = 5000
-//http://localhost:5000/add-newstudio
+
 app.use(cors());
+
+app.use(express.json());
+
+const PORT = 5000;
+
 const client = new MongoClient(process.env.MONGODB_URL);
 
 export async function connectToMongoDB() {
     try {
         await client.connect();
-        console.log("You successfully connected to MongoDB!");
+        console.log("Connected to MongoDB");
         return client;
-    } catch (err) {
-        console.dir(err);
     }
+    catch (error) { console.dir(error); }
 }
-connectToMongoDB();
-app.post('/add-newstudio', async (req, res) => {
-    console.log('Api called...');
-    res.send('Api Working!');
+const mongoClient = await connectToMongoDB();
+const database = mongoClient.db("studioSpace");
+const studiosCollection = database.collection("studios");
+app.post("/add-newstudio", async (req, res) => {
+    const data = req.body;
+    const result = await studiosCollection.insertOne(data);
+    console.log(result);
+    res.send(result);
 });
-app.get('/', (req, res) => {
-    res.send('Hello World!');
+app.get("/studios", async (req, res) => {
+    const result = await studiosCollection.find().toArray();
+    res.send(result);
+});
+
+//http://localhost:5000/add-newstudio
+app.get("/", (req, res) => {
+    res.send("Welcome to the API");
 });
 app.listen(PORT, () => {
-    console.log(`Example app listening on PORT ${PORT}`);
+    console.log(`Server is running on http://localhost:${PORT}`);
 });
