@@ -3,8 +3,8 @@ import express from "express";
 import { MongoClient, ObjectId } from "mongodb";
 import "dotenv/config";
 import cors from "cors";
-import { toNodeHandler } from "better-auth/node";
-import { auth } from "./auth.js";
+// import { toNodeHandler } from "better-auth/node";
+// import { auth } from "./auth.js";
 
 const app = express();
 
@@ -38,7 +38,7 @@ app.use(
 // IMPORTANT: Must be before express.json()
 // ==========================================
 
-app.all("/api/auth/*", toNodeHandler(auth));
+// app.all("/api/auth/*", toNodeHandler(auth));
 
 // ==========================================
 // EXPRESS JSON MIDDLEWARE
