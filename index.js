@@ -3,13 +3,48 @@ import express from "express";
 import { MongoClient, ObjectId } from "mongodb";
 import "dotenv/config";
 import cors from "cors";
+import { toNodeHandler } from "better-auth/node";
+import { auth } from "./auth.js";
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
-
 const PORT = process.env.PORT || 5000;
+
+// ==========================================
+// CORS CONFIGURATION
+// ==========================================
+
+const allowedOrigins = (
+    process.env.CLIENT_URL || "http://localhost:3000"
+)
+    .split(",")
+    .map((url) => url.trim());
+
+app.use(
+    cors({
+        origin: (origin, callback) => {
+            if (!origin || allowedOrigins.includes(origin)) {
+                callback(null, true);
+            } else {
+                callback(new Error("Not allowed by CORS"));
+            }
+        },
+        credentials: true,
+    })
+);
+
+// ==========================================
+// BETTER AUTH HANDLER
+// IMPORTANT: Must be before express.json()
+// ==========================================
+
+app.all("/api/auth/*", toNodeHandler(auth));
+
+// ==========================================
+// EXPRESS JSON MIDDLEWARE
+// ==========================================
+
+app.use(express.json());
 
 // ==========================================
 // MONGODB CONNECTION
@@ -53,7 +88,7 @@ async function connectToMongoDB() {
 }
 
 // ==========================================
-// CONNECT TO DATABASE BEFORE EVERY REQUEST
+// CONNECT TO DATABASE BEFORE API REQUESTS
 // ==========================================
 
 app.use(async (req, res, next) => {
