@@ -15,6 +15,10 @@ const PORT = process.env.PORT || 5000;
 // MONGODB CONNECTION
 // ==========================================
 
+if (!process.env.MONGODB_URL) {
+    throw new Error("MONGODB_URL is missing from environment variables.");
+}
+
 const client = new MongoClient(process.env.MONGODB_URL);
 
 let database;
@@ -82,10 +86,55 @@ app.post("/add-newstudio", async (req, res) => {
     try {
         const data = req.body;
 
-        const result = await studiosCollection.insertOne({
-            ...data,
+        const ownerEmail = (
+            data.ownerEmail ||
+            data.userEmail ||
+            ""
+        ).trim().toLowerCase();
+
+        if (!ownerEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Owner email is required.",
+            });
+        }
+
+        const studioData = {
+            title: data.title?.trim(),
+            image: data.image || data.imageUrl || "",
+            imageUrl: data.imageUrl || data.image || "",
+            category: data.category,
+            pricePerHour: Number(data.pricePerHour),
+            rating: Number(data.rating) || 0,
+            location: data.location?.trim(),
+            ownerEmail,
+            userEmail: ownerEmail,
             createdAt: new Date(),
-        });
+        };
+
+        if (
+            !studioData.title ||
+            !studioData.category ||
+            !studioData.location ||
+            !Number.isFinite(studioData.pricePerHour) ||
+            studioData.pricePerHour <= 0
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Please provide valid studio details.",
+            });
+        }
+
+        if (studioData.rating < 0 || studioData.rating > 5) {
+            return res.status(400).json({
+                success: false,
+                message: "Rating must be between 0 and 5.",
+            });
+        }
+
+        const result = await studiosCollection.insertOne(studioData);
+
+        console.log("New studio added:", result.insertedId);
 
         res.status(201).json({
             success: true,
@@ -125,6 +174,47 @@ app.get("/studios", async (req, res) => {
 });
 
 // ==========================================
+// GET STUDIOS BY OWNER EMAIL
+// ==========================================
+
+app.get("/my-studios", async (req, res) => {
+    try {
+        const email = req.query.email;
+
+        if (!email || typeof email !== "string") {
+            return res.status(400).json({
+                success: false,
+                message: "Owner email is required.",
+            });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+
+        const result = await studiosCollection
+            .find({
+                $or: [
+                    { ownerEmail: normalizedEmail },
+                    { userEmail: normalizedEmail },
+                ],
+            })
+            .sort({ createdAt: -1 })
+            .toArray();
+
+        res.status(200).json({
+            success: true,
+            studios: result,
+        });
+    } catch (error) {
+        console.error("Get my studios error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch your studios.",
+        });
+    }
+});
+
+// ==========================================
 // GET FEATURED STUDIOS
 // ==========================================
 
@@ -155,11 +245,16 @@ app.get("/studios/:id", async (req, res) => {
     try {
         const { id } = req.params;
 
-        const query = ObjectId.isValid(id)
-            ? { _id: new ObjectId(id) }
-            : { _id: id };
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid studio ID.",
+            });
+        }
 
-        const result = await studiosCollection.findOne(query);
+        const result = await studiosCollection.findOne({
+            _id: new ObjectId(id),
+        });
 
         if (!result) {
             return res.status(404).json({
@@ -175,6 +270,120 @@ app.get("/studios/:id", async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Failed to fetch studio.",
+        });
+    }
+});
+
+// ==========================================
+// UPDATE STUDIO
+// ==========================================
+
+app.patch("/studios/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { userEmail, ownerEmail, ...updates } = req.body;
+
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid studio ID.",
+            });
+        }
+
+        const email = (userEmail || ownerEmail || "")
+            .trim()
+            .toLowerCase();
+
+        if (!email) {
+            return res.status(400).json({
+                success: false,
+                message: "Owner email is required.",
+            });
+        }
+
+        delete updates._id;
+        delete updates.createdAt;
+
+        const result = await studiosCollection.updateOne(
+            {
+                _id: new ObjectId(id),
+                $or: [
+                    { ownerEmail: email },
+                    { userEmail: email },
+                ],
+            },
+            {
+                $set: {
+                    ...updates,
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Studio not found or you are not the owner.",
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Studio updated successfully!",
+        });
+    } catch (error) {
+        console.error("Update studio error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to update studio.",
+        });
+    }
+});
+
+// ==========================================
+// DELETE STUDIO
+// ==========================================
+
+app.delete("/studios/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { userEmail } = req.body;
+
+        if (!ObjectId.isValid(id) || !userEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid studio information.",
+            });
+        }
+
+        const email = userEmail.trim().toLowerCase();
+
+        const result = await studiosCollection.deleteOne({
+            _id: new ObjectId(id),
+            $or: [
+                { ownerEmail: email },
+                { userEmail: email },
+            ],
+        });
+
+        if (result.deletedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Studio not found or you are not the owner.",
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Studio deleted successfully!",
+        });
+    } catch (error) {
+        console.error("Delete studio error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to delete studio.",
         });
     }
 });
@@ -249,28 +458,21 @@ app.post("/bookings", async (req, res) => {
 
         const booking = {
             studioId: String(studio._id),
-
             studioTitle: studio.title || studioTitle || "Studio",
-
             studioImage:
                 studio.image ||
                 studio.imageUrl ||
                 studioImage ||
                 "",
-
             category: studio.category || category || "",
             location: studio.location || location || "",
-
             userEmail: userEmail.trim().toLowerCase(),
             userName: userName || "",
-
             date,
             time,
-
             duration: numericDuration,
             pricePerHour: numericPrice,
             totalPrice: numericDuration * numericPrice,
-
             status: "Pending",
             createdAt: new Date(),
         };
@@ -438,7 +640,11 @@ app.patch("/bookings/:id/cancel", async (req, res) => {
         const { id } = req.params;
         const { userEmail } = req.body;
 
-        if (!ObjectId.isValid(id) || !userEmail) {
+        if (
+            !ObjectId.isValid(id) ||
+            !userEmail ||
+            typeof userEmail !== "string"
+        ) {
             return res.status(400).json({
                 success: false,
                 message: "Invalid booking information.",
