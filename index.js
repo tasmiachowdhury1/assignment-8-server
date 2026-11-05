@@ -1,56 +1,502 @@
+
 import express from "express";
 import { MongoClient, ObjectId } from "mongodb";
 import "dotenv/config";
 import cors from "cors";
+
 const app = express();
+
 app.use(cors());
 app.use(express.json());
-const PORT = 5000;
+
+const PORT = process.env.PORT || 5000;
+
+// ==========================================
+// MONGODB CONNECTION
+// ==========================================
+
 const client = new MongoClient(process.env.MONGODB_URL);
 
-export async function connectToMongoDB() {
-    try {
-        await client.connect();
-        console.log("Connected to MongoDB");
-        return client;
+let database;
+let studiosCollection;
+let bookingsCollection;
+let connectionPromise;
+
+async function connectToMongoDB() {
+    if (database) return database;
+
+    if (!connectionPromise) {
+        connectionPromise = client
+            .connect()
+            .then(() => {
+                console.log("Connected to MongoDB successfully!");
+
+                database = client.db("studioSpace");
+
+                studiosCollection = database.collection("studios");
+                bookingsCollection = database.collection("bookings");
+
+                return database;
+            })
+            .catch((error) => {
+                connectionPromise = null;
+                console.error("MongoDB connection failed:", error);
+                throw error;
+            });
     }
-    catch (error) { console.dir(error); }
+
+    return connectionPromise;
 }
-const mongoClient = await connectToMongoDB();
-const database = mongoClient.db("studioSpace");
-const studiosCollection = database.collection("studios");
+
+// ==========================================
+// CONNECT TO DATABASE BEFORE EVERY REQUEST
+// ==========================================
+
+app.use(async (req, res, next) => {
+    try {
+        await connectToMongoDB();
+        next();
+    } catch (error) {
+        console.error("Database connection error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Database connection failed.",
+        });
+    }
+});
+
+// ==========================================
+// HOME ROUTE
+// ==========================================
+
+app.get("/", (req, res) => {
+    res.status(200).send("Welcome to StudioSpace API");
+});
+
+// ==========================================
+// ADD NEW STUDIO
+// ==========================================
+
 app.post("/add-newstudio", async (req, res) => {
-    const data = req.body;
-    const result = await studiosCollection.insertOne(data);
-    console.log(result);
-    res.send(result);
+    try {
+        const data = req.body;
+
+        const result = await studiosCollection.insertOne({
+            ...data,
+            createdAt: new Date(),
+        });
+
+        res.status(201).json({
+            success: true,
+            message: "Studio added successfully!",
+            insertedId: result.insertedId,
+        });
+    } catch (error) {
+        console.error("Add studio error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to add studio.",
+        });
+    }
 });
+
+// ==========================================
+// GET ALL STUDIOS
+// ==========================================
+
 app.get("/studios", async (req, res) => {
-    const result = await studiosCollection.find().toArray();
-    res.send(result);
+    try {
+        const result = await studiosCollection
+            .find()
+            .sort({ createdAt: -1 })
+            .toArray();
+
+        res.status(200).json(result);
+    } catch (error) {
+        console.error("Get studios error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch studios.",
+        });
+    }
 });
+
+// ==========================================
+// GET FEATURED STUDIOS
+// ==========================================
+
+app.get("/featured-studios", async (req, res) => {
+    try {
+        const result = await studiosCollection
+            .find()
+            .sort({ rating: -1, createdAt: -1 })
+            .limit(6)
+            .toArray();
+
+        res.status(200).json(result);
+    } catch (error) {
+        console.error("Featured studios error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch featured studios.",
+        });
+    }
+});
+
+// ==========================================
+// GET SINGLE STUDIO
+// ==========================================
+
 app.get("/studios/:id", async (req, res) => {
     try {
         const { id } = req.params;
+
         const query = ObjectId.isValid(id)
             ? { _id: new ObjectId(id) }
             : { _id: id };
+
         const result = await studiosCollection.findOne(query);
+
         if (!result) {
-            return res.status(404).send({ message: "Studio not found" });
+            return res.status(404).json({
+                success: false,
+                message: "Studio not found.",
+            });
         }
-        console.log(result);
-        res.send(result);
+
+        res.status(200).json(result);
     } catch (error) {
-        console.error(error);
-        res.status(500).send({ message: "Failed to fetch studio" });
+        console.error("Get single studio error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch studio.",
+        });
     }
 });
-//http://localhost:5000/add-newstudio
-app.get("/", (req, res) => {
-    res.send("Welcome to the API");
+
+// ==========================================
+// CREATE BOOKING
+// ==========================================
+
+app.post("/bookings", async (req, res) => {
+    try {
+        const {
+            studioId,
+            studioTitle,
+            studioImage,
+            category,
+            location,
+            userEmail,
+            userName,
+            date,
+            time,
+            duration,
+            pricePerHour,
+        } = req.body;
+
+        if (
+            !studioId ||
+            !userEmail ||
+            !date ||
+            !time ||
+            !duration ||
+            pricePerHour === undefined ||
+            pricePerHour === null
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Please provide all required booking details.",
+            });
+        }
+
+        if (!ObjectId.isValid(studioId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid studio ID.",
+            });
+        }
+
+        const numericDuration = Number(duration);
+        const numericPrice = Number(pricePerHour);
+
+        if (
+            !Number.isFinite(numericDuration) ||
+            numericDuration <= 0 ||
+            !Number.isFinite(numericPrice) ||
+            numericPrice <= 0
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid duration or studio price.",
+            });
+        }
+
+        const studio = await studiosCollection.findOne({
+            _id: new ObjectId(studioId),
+        });
+
+        if (!studio) {
+            return res.status(404).json({
+                success: false,
+                message: "Studio not found.",
+            });
+        }
+
+        const booking = {
+            studioId: String(studio._id),
+
+            studioTitle: studio.title || studioTitle || "Studio",
+
+            studioImage:
+                studio.image ||
+                studio.imageUrl ||
+                studioImage ||
+                "",
+
+            category: studio.category || category || "",
+            location: studio.location || location || "",
+
+            userEmail: userEmail.trim().toLowerCase(),
+            userName: userName || "",
+
+            date,
+            time,
+
+            duration: numericDuration,
+            pricePerHour: numericPrice,
+            totalPrice: numericDuration * numericPrice,
+
+            status: "Pending",
+            createdAt: new Date(),
+        };
+
+        const result = await bookingsCollection.insertOne(booking);
+
+        console.log("New booking created:", result.insertedId);
+
+        res.status(201).json({
+            success: true,
+            message: "Booking created successfully!",
+            bookingId: result.insertedId,
+            booking,
+        });
+    } catch (error) {
+        console.error("Create booking error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to create booking.",
+        });
+    }
 });
-app.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+
+// ==========================================
+// GET BOOKINGS BY USER EMAIL
+// ==========================================
+
+app.get("/bookings", async (req, res) => {
+    try {
+        const email = req.query.email;
+
+        if (!email || typeof email !== "string") {
+            return res.status(400).json({
+                success: false,
+                message: "User email is required.",
+            });
+        }
+
+        const result = await bookingsCollection
+            .find({
+                userEmail: email.trim().toLowerCase(),
+            })
+            .sort({ createdAt: -1 })
+            .toArray();
+
+        res.status(200).json({
+            success: true,
+            bookings: result,
+        });
+    } catch (error) {
+        console.error("Get bookings error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch bookings.",
+        });
+    }
 });
+
+// ==========================================
+// CONFIRM PENDING BOOKING
+// ==========================================
+
+app.patch("/bookings/:id/confirm", async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid booking ID.",
+            });
+        }
+
+        const result = await bookingsCollection.updateOne(
+            {
+                _id: new ObjectId(id),
+                status: "Pending",
+            },
+            {
+                $set: {
+                    status: "Confirmed",
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Pending booking not found.",
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Booking confirmed successfully!",
+        });
+    } catch (error) {
+        console.error("Confirm booking error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to confirm booking.",
+        });
+    }
+});
+
+// ==========================================
+// COMPLETE CONFIRMED BOOKING
+// ==========================================
+
+app.patch("/bookings/:id/complete", async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid booking ID.",
+            });
+        }
+
+        const result = await bookingsCollection.updateOne(
+            {
+                _id: new ObjectId(id),
+                status: "Confirmed",
+            },
+            {
+                $set: {
+                    status: "Completed",
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Confirmed booking not found.",
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Booking completed successfully!",
+        });
+    } catch (error) {
+        console.error("Complete booking error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to complete booking.",
+        });
+    }
+});
+
+// ==========================================
+// CANCEL PENDING BOOKING
+// ==========================================
+
+app.patch("/bookings/:id/cancel", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { userEmail } = req.body;
+
+        if (!ObjectId.isValid(id) || !userEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid booking information.",
+            });
+        }
+
+        const result = await bookingsCollection.updateOne(
+            {
+                _id: new ObjectId(id),
+                userEmail: userEmail.trim().toLowerCase(),
+                status: "Pending",
+            },
+            {
+                $set: {
+                    status: "Cancelled",
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Pending booking not found.",
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Booking cancelled successfully!",
+        });
+    } catch (error) {
+        console.error("Cancel booking error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to cancel booking.",
+        });
+    }
+});
+
+// ==========================================
+// START LOCAL SERVER
+// ==========================================
+
+if (process.env.NODE_ENV !== "production") {
+    connectToMongoDB()
+        .then(() => {
+            app.listen(PORT, () => {
+                console.log(
+                    `StudioSpace API running at http://localhost:${PORT}`
+                );
+            });
+        })
+        .catch((error) => {
+            console.error("Server startup failed:", error);
+            process.exit(1);
+        });
+}
+
 export default app;
